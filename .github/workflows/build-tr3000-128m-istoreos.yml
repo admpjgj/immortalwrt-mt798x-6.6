@@ -1,0 +1,73 @@
+# 文件名：.github/workflows/build-tr3000-128m-istoreos.yml
+name: Cudy TR3000 (128M) iStoreOS 在线编译
+on:
+  # 支持两种触发方式
+  workflow_dispatch:  # 手动触发（推荐，灵活控制）
+  push:               # 仓库推送代码时自动触发（可选）
+    branches: [ main ]
+    paths: [ ".github/workflows/*.yml" ]  # 仅修改配置文件时触发
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-22.04  # 固定使用GitHub云端Ubuntu 22.04环境
+    steps:
+      ########################################################################
+      # 步骤1：拉取源码（替换为你Fork后的仓库地址）
+      ########################################################################
+      - name: 拉取ImmortalWrt-MT798x源码（适配TR3000）
+        uses: actions/checkout@v4
+        with:
+          # 替换为【你Fork后的仓库地址】（例：https://github.com/你的GitHub用户名/immortalwrt-mt798x-24.10.git）
+          repository: padavanonly/immortalwrt-mt798x-24.10
+          fetch-depth: 1  # 仅拉取最新代码，节省时间
+          ref: main       # 源码分支（固定main即可）
+
+      ########################################################################
+      # 步骤2：安装编译依赖（一键配齐所有工具）
+      ########################################################################
+      - name: 安装编译依赖库
+        run: |
+          sudo apt update -y
+          sudo apt install -y build-essential gcc g++ binutils patch bzip2 flex bison make gettext ncurses-dev zlib1g-dev libssl-dev python3 python3-pip python3-setuptools rsync subversion unzip wget curl
+          pip3 install --upgrade pip
+
+      ########################################################################
+      # 步骤3：核心配置（适配128M内存+启用iStore）
+      ########################################################################
+      - name: 配置固件参数（TR3000 128M专用）
+        run: |
+          # 1. 复制MT3000模板配置（TR3000基于MT7981，模板兼容）
+          cp target/linux/mediatek/files/arch/arm64/boot/dts/mediatek/mt7981-gl-mt3000.dts .config
+          
+          # 2. 自动设置128M内存（无需手动改menuconfig，避免出错）
+          sed -i 's/CONFIG_KERNEL_MEM=256M/CONFIG_KERNEL_MEM=128M/' .config
+          
+          # 3. 拉取iStore插件（双地址备选，解决网络问题）
+          # 国内网络推荐用Gitee地址：https://gitee.com/linkease/istore/trunk/istore
+          svn co https://github.com/linkease/istore/trunk/istore feeds/packages/net/istore || \
+          svn co https://gitee.com/linkease/istore/trunk/istore feeds/packages/net/istore
+          
+          # 4. 启用iStore插件+生成最终配置
+          echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config  # 强制启用iStore
+          make defconfig  # 自动补全配置，避免参数缺失
+
+      ########################################################################
+      # 步骤4：下载依赖+编译固件（云端2核优化，避免超时）
+      ########################################################################
+      - name: 下载编译依赖（耗时约10-20分钟）
+        run: make download -j$(nproc)  # 多线程下载，加速依赖获取
+
+      - name: 编译固件（TR3000 128M专用，耗时约1.5-2.5小时）
+        run: make -j2 V=s  # 云端默认2核，用-j2避免内存溢出（关键优化）
+
+      ########################################################################
+      # 步骤5：上传固件（方便下载，自动命名带日期）
+      ########################################################################
+      - name: 上传编译好的固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: TR3000-128M-iStoreOS-${{ github.run_date }}  # 固件包名带日期，区分版本
+          path: |
+            bin/targets/mediatek/filogic/*.bin  # 固件路径（只保留bin格式，过滤无用文件）
+            bin/targets/mediatek/filogic/*.img  # 兼容部分镜像格式
+          retention-days: 30  # 固件保留30天，过期自动删除
